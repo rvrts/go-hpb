@@ -30,9 +30,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hpb-project/ggo-hpb/common"
-	"github.com/hpb-project/ggo-hpb/crypto"
-	"github.com/hpb-project/ggo-hpb/crypto/secp256k1"
+	"github.com/hpb-project/go-hpb/common"
+	"github.com/hpb-project/go-hpb/crypto"
+	"github.com/hpb-project/go-hpb/crypto/secp256k1"
 )
 
 const NodeIDBits = 512

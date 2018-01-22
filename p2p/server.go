@@ -25,13 +25,13 @@ import (
 
 	//change package directory. author: loushl
 	¡°github.com/hpb-project/go-hpb/common"
-	"github.com/hpb-project/ggo-hpb/common/mclock"
-	"github.com/hpb-project/ggo-hpb/event"
-	"github.com/hpb-project/ggo-hpb/log"
-	"github.com/hpb-project/ggo-hpb/p2p/discover"
-	"github.com/hpb-project/ggo-hpb/p2p/discv5"
-	"github.com/hpb-project/ggo-hpb/p2p/nat"
-	"github.com/hpb-project/ggo-hpb/p2p/netutil"
+	"github.com/hpb-project/go-hpb/common/mclock"
+	"github.com/hpb-project/go-hpb/event"
+	"github.com/hpb-project/go-hpb/log"
+	"github.com/hpb-project/go-hpb/p2p/discover"
+	"github.com/hpb-project/go-hpb/p2p/discv5"
+	"github.com/hpb-project/go-hpb/p2p/nat"
+	"github.com/hpb-project/go-hpb/p2p/netutil"
 )
 
 const (
