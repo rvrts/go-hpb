@@ -25,9 +25,9 @@ import (
 	"sync"
 	"time"
 
-	"go-hpb/common"
-	"go-hpb/crypto"
-	"go-hpb/log"
+	"github.com/hpb-project/ggo-hpb/common"
+	"github.com/hpb-project/ggo-hpb/crypto"
+	"github.com/hpb-project/ggo-hpb/log"
 )
 
 const (
