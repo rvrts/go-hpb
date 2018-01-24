@@ -33,4 +33,43 @@ type PrometheusConfig struct {
 	Epoch  uint64 `json:"epoch"`  // 充值投票点时间
 }
 
+type Vote struct {
+	Signer    common.Address `json:"signer"`    // 可以投票的Signer
+	Block     uint64         `json:"block"`     // 开始计票的区块
+	Address   common.Address `json:"address"`   // 操作的账户
+	Authorize bool           `json:"authorize"` // 投票的建议
+}
+
+type Tally struct {
+	Authorize bool `json:"authorize"` // 投票的想法，加入还是剔除
+	Votes     int  `json:"votes"`     // 通过投票的个数
+}
+
+type Historysnap struct {
+	config   *PrometheusConfig 
+	sigcache *lru.ARCCache       
+	Number  uint64                      `json:"number"`  // 生成快照的时间点
+	Hash    common.Hash                 `json:"hash"`    // 生成快照的Block hash
+	Signers map[common.Address]struct{} `json:"signers"` // 当前的授权用户
+	Recents map[uint64]common.Address   `json:"recents"` // 最近签名者 spam
+	Votes   []*Vote                     `json:"votes"`   // 最近的投票
+	Tally   map[common.Address]Tally    `json:"tally"`   // 目前的计票情况
+}
+
+// 为创世块使用
+func newHistorysnap(config *PrometheusConfig, sigcache *lru.ARCCache, number uint64, hash common.Hash, signers []common.Address) *Snapshot {
+	snap := &Snapshot{
+		config:   config,
+		sigcache: sigcache,
+		Number:   number,
+		Hash:     hash,
+		Signers:  make(map[common.Address]struct{}),
+		Recents:  make(map[uint64]common.Address),
+		Tally:    make(map[common.Address]Tally),
+	}
+	for _, signer := range signers {
+		snap.Signers[signer] = struct{}{}
+	}
+	return snap
+}
 
