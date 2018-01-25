@@ -57,8 +57,8 @@ type Historysnap struct {
 }
 
 // 为创世块使用
-func newHistorysnap(config *PrometheusConfig, sigcache *lru.ARCCache, number uint64, hash common.Hash, signers []common.Address) *Snapshot {
-	snap := &Snapshot{
+func newHistorysnap(config *PrometheusConfig, sigcache *lru.ARCCache, number uint64, hash common.Hash, signers []common.Address) *Historysnap {
+	snap := &Historysnap{
 		config:   config,
 		sigcache: sigcache,
 		Number:   number,
@@ -71,5 +71,99 @@ func newHistorysnap(config *PrometheusConfig, sigcache *lru.ARCCache, number uin
 		snap.Signers[signer] = struct{}{}
 	}
 	return snap
+}
+
+func loadHistorysnap(config *PrometheusConfig, sigcache *lru.ARCCache, db ethdb.Database, hash common.Hash) (*Historysnap, error) {
+	blob, err := db.Get(append([]byte("clique-"), hash[:]...))
+	if err != nil {
+		return nil, err
+	}
+	snap := new(Historysnap)
+	if err := json.Unmarshal(blob, snap); err != nil {
+		return nil, err
+	}
+	snap.config = config
+	snap.sigcache = sigcache
+
+	return snap, nil
+}
+
+// store inserts the snapshot into the database.
+func (s *Historysnap) store(db ethdb.Database) error {
+	blob, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	return db.Put(append([]byte("clique-"), s.Hash[:]...), blob)
+}
+
+// 深度拷贝
+func (s *Historysnap) copy() *Historysnap {
+	cpy := &Historysnap{
+		config:   s.config,
+		sigcache: s.sigcache,
+		Number:   s.Number,
+		Hash:     s.Hash,
+		Signers:  make(map[common.Address]struct{}),
+		Recents:  make(map[uint64]common.Address),
+		Votes:    make([]*Vote, len(s.Votes)),
+		Tally:    make(map[common.Address]Tally),
+	}
+	for signer := range s.Signers {
+		cpy.Signers[signer] = struct{}{}
+	}
+	for block, signer := range s.Recents {
+		cpy.Recents[block] = signer
+	}
+	for address, tally := range s.Tally {
+		cpy.Tally[address] = tally
+	}
+	copy(cpy.Votes, s.Votes)
+
+	return cpy
+}
+
+// 判断投票的有效性
+func (s *Historysnap) validVote(address common.Address, authorize bool) bool {
+	_, signer := s.Signers[address]
+	//如果已经在，应该删除，如果不在申请添加才合法
+	return (signer && !authorize) || (!signer && authorize)
+}
+
+// 投票池中添加
+func (s *Snapshot) cast(address common.Address, authorize bool) bool {
+
+	if !s.validVote(address, authorize) {
+		return false
+	}
+	
+	if old, ok := s.Tally[address]; ok {
+		old.Votes++
+		s.Tally[address] = old
+	} else {
+		s.Tally[address] = Tally{Authorize: authorize, Votes: 1}
+	}
+	return true
+}
+
+// 从投票池中删除
+func (s *Snapshot) uncast(address common.Address, authorize bool) bool {
+
+	tally, ok := s.Tally[address]
+	if !ok {
+		return false
+	}
+
+	if tally.Authorize != authorize {
+		return false
+	}
+
+	if tally.Votes > 1 {
+		tally.Votes--
+		s.Tally[address] = tally
+	} else {
+		delete(s.Tally, address)
+	}
+	return true
 }
 
