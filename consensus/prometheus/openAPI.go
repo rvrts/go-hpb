@@ -32,6 +32,7 @@ type openAPI struct {
 
 // 根据区块的头Number获取区块头信息
 func (openAPI *openAPI) GetBlockchainHeaderByNumber(number *rpc.BlockNumber) (*types.Header){
+	var header *types.Header
 	if number == nil || *number == rpc.LatestBlockNumber {
 		header = openAPI.chain.CurrentHeader()
 	} else {
@@ -42,13 +43,7 @@ func (openAPI *openAPI) GetBlockchainHeaderByNumber(number *rpc.BlockNumber) (*t
 
 // 根据区块的Hash获取区块头信息
 func (openAPI *openAPI) GetBlockchainHeaderByHash(hash common.Hash) (*types.Header){
-	
-	if hash == nil {
-		header = nil
-	} else {
-		header := openAPI.chain.GetHeaderByHash(hash)
-	}
-	return header
+	return openAPI.chain.GetHeaderByHash(hash)
 }
 
 // 根据去块号获取历史快照

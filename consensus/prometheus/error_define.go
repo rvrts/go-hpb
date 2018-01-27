@@ -16,6 +16,10 @@
 
 package prometheus
 
+import (
+	"errors"
+)
+
 	// extra-data 信息不完整
 	var errMissingVanity = errors.New("extra-data 32 byte vanity prefix missing")
 

@@ -53,7 +53,6 @@ func initHardwareAddr() {
 			}
 		}
 	}
-	// Set multicast bit as recommended in RFC 4122
 	hardwareAddr[0] |= 0x01
 }
 
@@ -61,8 +60,6 @@ func unixTimeFunc() uint64 {
 	return epochStart + uint64(time.Now().UnixNano()/100)
 }
 
-
-// SetVariant sets variant bits as described in RFC 4122.
 func (u *UUID) SetVariant() {
 	u[8] = (u[8] & 0xbf) | 0x80
 }
