@@ -17,7 +17,7 @@
 package prometheus
 
 import (
-	"fmt"
+	//"fmt"
 	"net"
 	"os"
 	"time"
@@ -97,7 +97,6 @@ func pre_random() UUID {
 	binary.BigEndian.PutUint16(u[4:], uint16(timeNow>>32))
 	binary.BigEndian.PutUint16(u[6:], uint16(timeNow>>48))
 	
-	
 	binary.BigEndian.PutUint32(u[8:], posixUID)
 	binary.BigEndian.PutUint32(u[10:], posixGID)
 		
@@ -105,8 +104,7 @@ func pre_random() UUID {
 	binary.BigEndian.PutUint16(u[12:], clockSequence)
 
 	initHardwareAddr()
-		fmt.Printf("UUIDv4: %s\n", hardwareAddr)
-
+	//fmt.Printf("UUIDv4: %s\n", hardwareAddr)
 	//copy(u[10:], hardwareAddr)
 
 	u.SetVersion(1)
