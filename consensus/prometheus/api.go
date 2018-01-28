@@ -99,13 +99,21 @@ func (api *API) Propose(address common.Address, auth bool) {
 	api.prometheus.lock.Lock()
 	defer api.prometheus.lock.Unlock()
    
-    u1 :=  pre_random()
+    rand :=  pre_random().String()
     
-    fmt.Printf("UUIDv4:", u1)
-
- 
+    //address.Str()
+    //fmt.Printf("Hex: %s ", address.Hex())
+    //fmt.Printf("sha3: %s ", rand)
+    //fmt.Printf("Hex + sha3: %s ", address.Hex() + rand)
+    //fmt.Printf("sha3: %s ", api.prometheus.Keccak512([]byte(rand)))
+    
+    phash :=  api.prometheus.fnv_hash([]byte(address.Hex() + rand))
+    fmt.Printf("fnv: %s", phash)
+    
+    api.prometheus.proposalsHash[phash] = auth
 	api.prometheus.proposals[address] = auth
 }
+
 
 func (api *API) Discard(address common.Address) {
 	api.prometheus.lock.Lock()
