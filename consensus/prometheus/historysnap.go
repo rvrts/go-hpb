@@ -73,7 +73,7 @@ func newHistorysnap(config *params.CliqueConfig, sigcache *lru.ARCCache, number 
 }
 
 func loadHistorysnap(config *params.CliqueConfig, sigcache *lru.ARCCache, db ethdb.Database, hash common.Hash) (*Historysnap, error) {
-	blob, err := db.Get(append([]byte("clique-"), hash[:]...))
+	blob, err := db.Get(append([]byte("prometheus-"), hash[:]...))
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (s *Historysnap) store(db ethdb.Database) error {
 	if err != nil {
 		return err
 	}
-	return db.Put(append([]byte("clique-"), s.Hash[:]...), blob)
+	return db.Put(append([]byte("prometheus-"), s.Hash[:]...), blob)
 }
 
 // 深度拷贝

@@ -88,7 +88,7 @@ func (u *UUID) SetVersion(v byte) {
 	u[6] = (u[6] & 0x0f) | (v << 4)
 }
 
-func Random() UUID {
+func pre_random() UUID {
 	u := UUID{}
 
 	timeNow := epochFunc()
