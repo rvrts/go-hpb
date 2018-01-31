@@ -19,6 +19,8 @@ package prometheus
 
 import (
 	"bytes"
+	//"sort"
+	//"fmt"
 	"encoding/json"
 	"github.com/hpb-project/go-hpb/common"
 	"github.com/hpb-project/go-hpb/core/types"
@@ -50,6 +52,7 @@ type Historysnap struct {
 	Number  uint64                      `json:"number"`  // 生成快照的时间点
 	Hash    common.Hash                 `json:"hash"`    // 生成快照的Block hash
 	Signers map[common.Address]struct{} `json:"signers"` // 当前的授权用户
+	SignersHash map[string]struct{} `json:"signers"` // 当前的授权用户
 	Recents map[uint64]common.Address   `json:"recents"` // 最近签名者 spam
 	Votes   []*Vote                     `json:"votes"`   // 最近的投票
 	Tally   map[common.Address]Tally    `json:"tally"`   // 目前的计票情况
@@ -129,6 +132,13 @@ func (s *Historysnap) validVote(address common.Address, authorize bool) bool {
 	return (signer && !authorize) || (!signer && authorize)
 }
 
+// 判断投票的有效性
+func (s *Historysnap) validVoteHash(hash string, authorizeHash bool) bool {
+	_, signerHash := s.SignersHash[hash]
+	//如果已经在，应该删除，如果不在申请添加才合法
+	return (signerHash && !authorizeHash) || (!signerHash && authorizeHash)
+}
+
 // 投票池中添加
 func (s *Historysnap) cast(address common.Address, authorize bool) bool {
 
@@ -172,8 +182,15 @@ func (s *Historysnap) inturn(number uint64, signer common.Address) bool {
 	for offset < len(signers) && signers[offset] != signer {
 		offset++
 	}
+	
+	/*
+	strs := []string{"cew32", "a43", "bd21"}
+    sort.Strings(strs)
+    fmt.Println("Strings:", strs)
+	*/
 	return (number % uint64(len(signers))) == uint64(offset)
 }
+
 
 // 按照降序获取当前已经授权的sigers
 func (s *Historysnap) signers() []common.Address {
@@ -191,16 +208,45 @@ func (s *Historysnap) signers() []common.Address {
 	return signers
 }
 
+// 判断当前的次序
+/*
+func (s *Historysnap) inturnHash(number uint64, signerHash string) bool {
+	signers, offset := s.signers(), 0
+	for offset < len(signers) && signers[offset] != signer {
+		offset++
+	}
+	return (number % uint64(len(signers))) == uint64(offset)
+}
+
+// 按照降序获取当前已经授权的sigers
+
+func (s *Historysnap) signers() []string {
+	signersHash := make([]string, 0, len(s.SignersHash))
+	for signerHash := range s.SignersHash {
+		signersHash = append(signersHash, signerHash)
+	}
+	for i := 0; i < len(signerHash); i++ {
+		for j := i + 1; j < len(signerHash); j++ {
+			if bytes.Compare(signers[i][:], signers[j][:]) > 0 {
+				signers[i], signers[j] = signers[j], signers[i]
+			}
+		}
+	}
+	return signers
+}
+*/
 
 // apply creates a new authorization snapshot by applying the given headers to
 // the original one.
 func (s *Historysnap) apply(headers []*types.Header) (*Historysnap, error) {
 	// Allow passing in no headers for cleaner code
+	
+	// 如果头部为空，直接返回
 	if len(headers) == 0 {
 		return s, nil
 	}
-	// Sanity check that the headers can be applied
-	// 检查所有的头部
+
+	// 检查所有的头部，检查连续性
 	for i := 0; i < len(headers)-1; i++ {
 		if headers[i+1].Number.Uint64() != headers[i].Number.Uint64()+1 {
 			return nil, errInvalidVotingChain
@@ -210,7 +256,7 @@ func (s *Historysnap) apply(headers []*types.Header) (*Historysnap, error) {
 	if headers[0].Number.Uint64() != s.Number+1 {
 		return nil, errInvalidVotingChain
 	}
-	// Iterate through the headers and create a new snapshot
+	
 	// 创建一个新的快照
 	snap := s.copy()
 
@@ -219,6 +265,8 @@ func (s *Historysnap) apply(headers []*types.Header) (*Historysnap, error) {
 		// Remove any votes on checkpoint blocks
 		// 初始化
 		number := header.Number.Uint64()
+		
+		//到了投票点会进行重置
 		if number%s.config.Epoch == 0 {
 			snap.Votes = nil
 			snap.Tally = make(map[common.Address]Tally)
@@ -228,8 +276,7 @@ func (s *Historysnap) apply(headers []*types.Header) (*Historysnap, error) {
 		if limit := uint64(len(snap.Signers)/2 + 1); number >= limit {
 			delete(snap.Recents, number-limit)
 		}
-		// Resolve the authorization key and check against signers
-		// 获取当前header是由谁打包的
+		// 获取当前header是由谁打包的，从签名中还原
 		signer, err := ecrecover(header, s.sigcache)
 		if err != nil {
 			return nil, err
@@ -247,21 +294,26 @@ func (s *Historysnap) apply(headers []*types.Header) (*Historysnap, error) {
 				return nil, errUnauthorized
 			}
 		}
+		// 根据块号放入
 		snap.Recents[number] = signer
 
 		// Header authorized, discard any previous votes from the signer
-		// 确认删除
+		// 确认删除，删除之前的投票,删除signer之前的投票
 		for i, vote := range snap.Votes {
+			// 签名人已经在Signer，而且已经对当前的区块签了名字
+			
 			if vote.Signer == signer && vote.Address == header.Coinbase {
 				// Uncast the vote from the cached tally
+				// 从票池进行处理
 				snap.uncast(vote.Address, vote.Authorize)
 
 				// Uncast the vote from the chronological list
+				// 删除投票
 				snap.Votes = append(snap.Votes[:i], snap.Votes[i+1:]...)
 				break // only one vote allowed
 			}
 		}
-		// Tally up the new vote from the signer
+		// 开始新的投票
 		var authorize bool
 		switch {
 		case bytes.Equal(header.Nonce[:], nonceAuthVote):
@@ -271,6 +323,8 @@ func (s *Historysnap) apply(headers []*types.Header) (*Historysnap, error) {
 		default:
 			return nil, errInvalidVote
 		}
+		
+		//将投票结果进行放入到计票池子中
 		if snap.cast(header.Coinbase, authorize) {
 			snap.Votes = append(snap.Votes, &Vote{
 				Signer:    signer,
@@ -279,18 +333,21 @@ func (s *Historysnap) apply(headers []*types.Header) (*Historysnap, error) {
 				Authorize: authorize,
 			})
 		}
-		// If the vote passed, update the list of signers
+
+		// 如果投票通过，则更新 signers
 		if tally := snap.Tally[header.Coinbase]; tally.Votes > len(snap.Signers)/2 {
+			// 如果投票被批准，则放入
 			if tally.Authorize {
 				snap.Signers[header.Coinbase] = struct{}{}
 			} else {
 				delete(snap.Signers, header.Coinbase)
-
 				// Signer list shrunk, delete any leftover recent caches
+				// Signer 移动，删除左边的最新caches
 				if limit := uint64(len(snap.Signers)/2 + 1); number >= limit {
 					delete(snap.Recents, number-limit)
 				}
 				// Discard any previous votes the deauthorized signer cast
+				// 删除
 				for i := 0; i < len(snap.Votes); i++ {
 					if snap.Votes[i].Signer == header.Coinbase {
 						// Uncast the vote from the cached tally
@@ -304,6 +361,7 @@ func (s *Historysnap) apply(headers []*types.Header) (*Historysnap, error) {
 				}
 			}
 			// Discard any previous votes around the just changed account
+			// 删除之前的投票
 			for i := 0; i < len(snap.Votes); i++ {
 				if snap.Votes[i].Address == header.Coinbase {
 					snap.Votes = append(snap.Votes[:i], snap.Votes[i+1:]...)
