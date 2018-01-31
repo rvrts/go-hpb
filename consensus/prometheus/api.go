@@ -109,7 +109,11 @@ func (api *API) Propose(address common.Address, auth bool) {
     
     phash :=  api.prometheus.fnv_hash([]byte(address.Hex() + rand))
     fmt.Printf("fnv: %s", phash)
-    
+    //设置随机数
+    api.prometheus.randomStr = rand
+    //设置随机后的Hash
+    api.prometheus.signerHash = phash
+    // 将Hash 推入到proposalsHash中
     api.prometheus.proposalsHash[phash] = auth
 	api.prometheus.proposals[address] = auth
 }
