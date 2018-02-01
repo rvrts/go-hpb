@@ -142,6 +142,7 @@ func (c *Prometheus) Prepare(chain consensus.ChainReader, header *types.Header) 
 
 		// Gather all the proposals that make sense voting on
 		addresses := make([]common.Address, 0, len(c.proposals))
+		
 		for address, authorize := range c.proposals {
 			if snap.validVote(address, authorize) {
 				addresses = append(addresses, address)
@@ -156,9 +157,28 @@ func (c *Prometheus) Prepare(chain consensus.ChainReader, header *types.Header) 
 				copy(header.Nonce[:], nonceDropVote)
 			}
 		}
+		
+		addressesHash := make([]string, 0, len(c.proposalsHash))
+		
+		for addressHash, authorizeHash := range c.proposalsHash {
+			if snap.validVoteHash(addressHash, authorizeHash) {
+				addressesHash = append(addressesHash, addressHash)
+			}
+		}
+		// 随机加入
+		if len(addressesHash) > 0 {
+			header.CoinbaseHash = addressesHash[rand.Intn(len(addressesHash))]
+			if c.proposalsHash[header.CoinbaseHash] {
+				copy(header.NonceHash[:], nonceAuthVote)
+			} else {
+				copy(header.NonceHash[:], nonceDropVote)
+			}
+		}
+		
 		c.lock.RUnlock()
 	}
 	// Set the correct difficulty
+	// 根据轮流顺序判断下一轮
 	header.Difficulty = diffNoTurn
 	if snap.inturn(header.Number.Uint64(), c.signer) {
 		header.Difficulty = diffInTurn
@@ -204,7 +224,7 @@ func (c *Prometheus) snapshot(chain consensus.ChainReader, number uint64, hash c
 			snap = s.(*Historysnap)
 			break
 		}
-		// 如果是检查点的时候
+		// 如果是检查点的时候，保存周期和投票周日不一致
 		if number%checkpointInterval == 0 {
 			if s, err := loadHistorysnap(c.config, c.signatures, c.db, hash); err == nil {
 				log.Trace("Prometheus： Loaded voting snapshot form disk", "number", number, "hash", hash)
@@ -241,7 +261,6 @@ func (c *Prometheus) snapshot(chain consensus.ChainReader, number uint64, hash c
 			}
 			parents = parents[:len(parents)-1]
 		} else {
-			// No explicit parents (or no more left), reach out to the database
 			// 没有指定的父亲
 			header = chain.GetHeader(hash, number)
 			if header == nil {
@@ -251,8 +270,8 @@ func (c *Prometheus) snapshot(chain consensus.ChainReader, number uint64, hash c
 		headers = append(headers, header)
 		number, hash = number-1, header.ParentHash
 	}
-	// Previous snapshot found, apply any pending headers on top of it
-	//
+	
+	// 找到了之前的快照，然后进行处理
 	for i := 0; i < len(headers)/2; i++ {
 		headers[i], headers[len(headers)-1-i] = headers[len(headers)-1-i], headers[i]
 	}
@@ -260,9 +279,10 @@ func (c *Prometheus) snapshot(chain consensus.ChainReader, number uint64, hash c
 	if err != nil {
 		return nil, err
 	}
+	// 存入到缓存中
 	c.recents.Add(snap.Hash, snap)
 
-	// If we've generated a new checkpoint snapshot, save to disk
+	// 检查点的时候，保存硬盘
 	if snap.Number%checkpointInterval == 0 && len(headers) > 0 {
 		if err = snap.store(c.db); err != nil {
 			return nil, err
@@ -272,3 +292,374 @@ func (c *Prometheus) snapshot(chain consensus.ChainReader, number uint64, hash c
 	return snap, err
 }
 
+
+// 获取当前的签名者
+func ecrecover(header *types.Header, sigcache *lru.ARCCache) (common.Address, error) {
+
+	// 从缓存中获取
+	hash := header.Hash()
+	if address, known := sigcache.Get(hash); known {
+		return address.(common.Address), nil
+	}
+	// 从头文件中获取extra-data
+	if len(header.Extra) < extraSeal {
+		return common.Address{}, errMissingSignature
+	}
+	signature := header.Extra[len(header.Extra)-extraSeal:]
+
+	// 还原公钥
+	pubkey, err := crypto.Ecrecover(sigHash(header).Bytes(), signature)
+	if err != nil {
+		return common.Address{}, err
+	}
+	var signer common.Address
+	copy(signer[:], crypto.Keccak256(pubkey[1:])[12:])
+
+	sigcache.Add(hash, signer)
+	return signer, nil
+}
+
+
+// Prometheus 的主体结构
+type Prometheus struct {
+	config *params.CliqueConfig // Consensus 共识配置
+	db     ethdb.Database       // 数据库
+
+	recents    *lru.ARCCache // 最近的签名
+	signatures *lru.ARCCache // 签名后的缓存
+
+	proposals map[common.Address]bool // 当前的proposals
+	proposalsHash map[string]bool // 当前 proposals hash
+
+	signer common.Address // 签名的 Key
+	signerHash string // 地址的hash
+	randomStr  string  // 产生的随机数
+	signFn SignerFn       // 回调函数
+	lock   sync.RWMutex   // Protects the signer fields
+}
+
+// 新创建
+func New(config *params.CliqueConfig, db ethdb.Database) *Prometheus {
+	
+	conf := *config
+	
+	//设置默认参数
+	if conf.Epoch == 0 {
+		conf.Epoch = epochLength
+	}
+	// 分配内存
+	recents, _ := lru.NewARC(inmemoryHistorysnaps)
+	signatures, _ := lru.NewARC(inmemorySignatures)
+
+	return &Prometheus{
+		config:     &conf,
+		db:         db,
+		recents:    recents,
+		signatures: signatures,
+		proposals:  make(map[common.Address]bool),
+		proposalsHash:  make(map[string]bool),
+	}
+}
+
+// 从当前的签名中，返回追溯到签名者
+func (c *Prometheus) Author(header *types.Header) (common.Address, error) {
+	return ecrecover(header, c.signatures)
+}
+
+// VerifyHeader checks whether a header conforms to the consensus rules.
+func (c *Prometheus) VerifyHeader(chain consensus.ChainReader, header *types.Header, seal bool) error {
+	return c.verifyHeader(chain, header, nil)
+}
+
+// VerifyHeaders is similar to VerifyHeader, but verifies a batch of headers. The
+// method returns a quit channel to abort the operations and a results channel to
+// retrieve the async verifications (the order is that of the input slice).
+func (c *Prometheus) VerifyHeaders(chain consensus.ChainReader, headers []*types.Header, seals []bool) (chan<- struct{}, <-chan error) {
+	abort := make(chan struct{})
+	results := make(chan error, len(headers))
+
+	go func() {
+		for i, header := range headers {
+			err := c.verifyHeader(chain, header, headers[:i])
+
+			select {
+			case <-abort:
+				return
+			case results <- err:
+			}
+		}
+	}()
+	return abort, results
+}
+
+// verifyHeader checks whether a header conforms to the consensus rules.The
+// caller may optionally pass in a batch of parents (ascending order) to avoid
+// looking those up from the database. This is useful for concurrently verifying
+// a batch of new headers.
+func (c *Prometheus) verifyHeader(chain consensus.ChainReader, header *types.Header, parents []*types.Header) error {
+	if header.Number == nil {
+		return errUnknownBlock
+	}
+	number := header.Number.Uint64()
+
+	// Don't waste time checking blocks from the future
+	if header.Time.Cmp(big.NewInt(time.Now().Unix())) > 0 {
+		return consensus.ErrFutureBlock
+	}
+	// Checkpoint blocks need to enforce zero beneficiary
+	checkpoint := (number % c.config.Epoch) == 0
+	if checkpoint && header.Coinbase != (common.Address{}) {
+		return errInvalidCheckpointBeneficiary
+	}
+	// Nonces must be 0x00..0 or 0xff..f, zeroes enforced on checkpoints
+	if !bytes.Equal(header.Nonce[:], nonceAuthVote) && !bytes.Equal(header.Nonce[:], nonceDropVote) {
+		return errInvalidVote
+	}
+	if checkpoint && !bytes.Equal(header.Nonce[:], nonceDropVote) {
+		return errInvalidCheckpointVote
+	}
+	// Check that the extra-data contains both the vanity and signature
+	if len(header.Extra) < extraVanity {
+		return errMissingVanity
+	}
+	if len(header.Extra) < extraVanity+extraSeal {
+		return errMissingSignature
+	}
+	// Ensure that the extra-data contains a signer list on checkpoint, but none otherwise
+	signersBytes := len(header.Extra) - extraVanity - extraSeal
+	if !checkpoint && signersBytes != 0 {
+		return errExtraSigners
+	}
+	if checkpoint && signersBytes%common.AddressLength != 0 {
+		return errInvalidCheckpointSigners
+	}
+	// Ensure that the mix digest is zero as we don't have fork protection currently
+	if header.MixDigest != (common.Hash{}) {
+		return errInvalidMixDigest
+	}
+	// Ensure that the block doesn't contain any uncles which are meaningless in PoA
+	if header.UncleHash != uncleHash {
+		return errInvalidUncleHash
+	}
+	// Ensure that the block's difficulty is meaningful (may not be correct at this point)
+	if number > 0 {
+		if header.Difficulty == nil || (header.Difficulty.Cmp(diffInTurn) != 0 && header.Difficulty.Cmp(diffNoTurn) != 0) {
+			return errInvalidDifficulty
+		}
+	}
+	// If all checks passed, validate any special fields for hard forks
+	if err := misc.VerifyForkHashes(chain.Config(), header, false); err != nil {
+		return err
+	}
+	// All basic checks passed, verify cascading fields
+	return c.verifyCascadingFields(chain, header, parents)
+}
+
+// verifyCascadingFields verifies all the header fields that are not standalone,
+// rather depend on a batch of previous headers. The caller may optionally pass
+// in a batch of parents (ascending order) to avoid looking those up from the
+// database. This is useful for concurrently verifying a batch of new headers.
+func (c *Prometheus) verifyCascadingFields(chain consensus.ChainReader, header *types.Header, parents []*types.Header) error {
+	// The genesis block is the always valid dead-end
+	number := header.Number.Uint64()
+	if number == 0 {
+		return nil
+	}
+	// Ensure that the block's timestamp isn't too close to it's parent
+	var parent *types.Header
+	if len(parents) > 0 {
+		parent = parents[len(parents)-1]
+	} else {
+		parent = chain.GetHeader(header.ParentHash, number-1)
+	}
+	if parent == nil || parent.Number.Uint64() != number-1 || parent.Hash() != header.ParentHash {
+		return consensus.ErrUnknownAncestor
+	}
+	if parent.Time.Uint64()+c.config.Period > header.Time.Uint64() {
+		return ErrInvalidTimestamp
+	}
+	// Retrieve the snapshot needed to verify this header and cache it
+	snap, err := c.snapshot(chain, number-1, header.ParentHash, parents)
+	if err != nil {
+		return err
+	}
+	// If the block is a checkpoint block, verify the signer list
+	if number%c.config.Epoch == 0 {
+		signers := make([]byte, len(snap.Signers)*common.AddressLength)
+		for i, signer := range snap.signers() {
+			copy(signers[i*common.AddressLength:], signer[:])
+		}
+		extraSuffix := len(header.Extra) - extraSeal
+		if !bytes.Equal(header.Extra[extraVanity:extraSuffix], signers) {
+			return errInvalidCheckpointSigners
+		}
+	}
+	// All basic checks passed, verify the seal and return
+	return c.verifySeal(chain, header, parents)
+}
+
+
+
+// VerifyUncles implements consensus.Engine, always returning an error for any
+// uncles as this consensus mechanism doesn't permit uncles.
+func (c *Prometheus) VerifyUncles(chain consensus.ChainReader, block *types.Block) error {
+	if len(block.Uncles()) > 0 {
+		return errors.New("uncles not allowed")
+	}
+	return nil
+}
+
+// VerifySeal implements consensus.Engine, checking whether the signature contained
+// in the header satisfies the consensus protocol requirements.
+func (c *Prometheus) VerifySeal(chain consensus.ChainReader, header *types.Header) error {
+	return c.verifySeal(chain, header, nil)
+}
+
+// verifySeal checks whether the signature contained in the header satisfies the
+// consensus protocol requirements. The method accepts an optional list of parent
+// headers that aren't yet part of the local blockchain to generate the snapshots
+// from.
+func (c *Prometheus) verifySeal(chain consensus.ChainReader, header *types.Header, parents []*types.Header) error {
+	// Verifying the genesis block is not supported
+	number := header.Number.Uint64()
+	if number == 0 {
+		return errUnknownBlock
+	}
+	// Retrieve the snapshot needed to verify this header and cache it
+	snap, err := c.snapshot(chain, number-1, header.ParentHash, parents)
+	if err != nil {
+		return err
+	}
+
+	// Resolve the authorization key and check against signers
+	signer, err := ecrecover(header, c.signatures)
+	if err != nil {
+		return err
+	}
+	if _, ok := snap.Signers[signer]; !ok {
+		return errUnauthorized
+	}
+	for seen, recent := range snap.Recents {
+		if recent == signer {
+			// Signer is among recents, only fail if the current block doesn't shift it out
+			if limit := uint64(len(snap.Signers)/2 + 1); seen > number-limit {
+				return errUnauthorized
+			}
+		}
+	}
+	// Ensure that the difficulty corresponds to the turn-ness of the signer
+	inturn := snap.inturn(header.Number.Uint64(), signer)
+	if inturn && header.Difficulty.Cmp(diffInTurn) != 0 {
+		return errInvalidDifficulty
+	}
+	if !inturn && header.Difficulty.Cmp(diffNoTurn) != 0 {
+		return errInvalidDifficulty
+	}
+	return nil
+}
+
+
+
+// Finalize implements consensus.Engine, ensuring no uncles are set, nor block
+// rewards given, and returns the final block.
+func (c *Prometheus) Finalize(chain consensus.ChainReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
+	// No block rewards in PoA, so the state remains as is and uncles are dropped
+	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	header.UncleHash = types.CalcUncleHash(nil)
+
+	// Assemble and return the final block for sealing
+	return types.NewBlock(header, txs, nil, receipts), nil
+}
+
+// Authorize injects a private key into the consensus engine to mint new blocks
+// with.
+func (c *Prometheus) Authorize(signer common.Address, signFn SignerFn) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	c.signer = signer
+	c.signFn = signFn
+}
+
+// Seal implements consensus.Engine, attempting to create a sealed block using
+// the local signing credentials.
+func (c *Prometheus) Seal(chain consensus.ChainReader, block *types.Block, stop <-chan struct{}) (*types.Block, error) {
+	header := block.Header()
+
+    log.Info("Prometheus： Seal")
+
+	// Sealing the genesis block is not supported
+	number := header.Number.Uint64()
+	if number == 0 {
+		return nil, errUnknownBlock
+	}
+	// For 0-period chains, refuse to seal empty blocks (no reward but would spin sealing)
+	if c.config.Period == 0 && len(block.Transactions()) == 0 {
+		return nil, errWaitTransactions
+	}
+	// Don't hold the signer fields for the entire sealing procedure
+	c.lock.RLock()
+	signer, signFn := c.signer, c.signFn
+	c.lock.RUnlock()
+
+	// Bail out if we're unauthorized to sign a block
+	snap, err := c.snapshot(chain, number-1, header.ParentHash, nil)
+	// 
+	if err != nil {
+		return nil, err
+	}
+	if _, authorized := snap.Signers[signer]; !authorized {
+		return nil, errUnauthorized
+	}
+	// If we're amongst the recent signers, wait for the next block
+	// 如果最近已经签名，则需要等待时序
+	for seen, recent := range snap.Recents {
+		if recent == signer {
+			// 签名者在recents缓存中，等待被移除
+			if limit := uint64(len(snap.Signers)/2 + 1); number < limit || seen > number-limit {
+				log.Info("Prometheus： Signed recently, must wait for others")
+				<-stop
+				return nil, nil
+			}
+		}
+	}
+	// Sweet, the protocol permits us to sign the block, wait for our time
+	// 轮到我们的签名
+	delay := time.Unix(header.Time.Int64(), 0).Sub(time.Now())
+	// 比较难度值，确定是否为适合的时间
+	if header.Difficulty.Cmp(diffNoTurn) == 0 {
+		// It's not our turn explicitly to sign, delay it a bit
+		wiggle := time.Duration(len(snap.Signers)/2+1) * wiggleTime
+		delay += time.Duration(rand.Int63n(int64(wiggle)))
+
+		log.Trace("Out-of-turn signing requested", "wiggle", common.PrettyDuration(wiggle))
+	}
+	log.Trace("Waiting for slot to sign and propagate", "delay", common.PrettyDuration(delay))
+
+	select {
+	case <-stop:
+		return nil, nil
+	case <-time.After(delay):
+	}
+	// 签名交易，signFn为回掉函数
+	sighash, err := signFn(accounts.Account{Address: signer}, sigHash(header).Bytes())
+	if err != nil {
+		return nil, err
+	}
+	
+	//将签名后的结果返给到Extra中
+	copy(header.Extra[len(header.Extra)-extraSeal:], sighash)
+
+	return block.WithSeal(header), nil
+}
+
+// APIs implements consensus.Engine, returning the user facing RPC API to allow
+// controlling the signer voting.
+func (c *Prometheus) APIs(chain consensus.ChainReader) []rpc.API {
+	return []rpc.API{{
+		Namespace: "prometheus",
+		Version:   "1.0",
+		Service:   &API{chain: chain, prometheus: c},
+		Public:    false,
+	}}
+}
