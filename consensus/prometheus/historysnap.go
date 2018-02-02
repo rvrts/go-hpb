@@ -19,7 +19,7 @@ package prometheus
 
 import (
 	"bytes"
-	//"sort"
+	"sort"
 	//"fmt"
 	"encoding/json"
 	"github.com/hpb-project/go-hpb/common"
@@ -66,12 +66,15 @@ func newHistorysnap(config *params.CliqueConfig, sigcache *lru.ARCCache, number 
 		Number:   number,
 		Hash:     hash,
 		Signers:  make(map[common.Address]struct{}),
+		SignersHash:  make(map[string]struct{}),
 		Recents:  make(map[uint64]common.Address),
 		Tally:    make(map[common.Address]Tally),
 	}
 	for _, signer := range signers {
 		snap.Signers[signer] = struct{}{}
 	}
+	
+	snap.SignersHash["0"] =  struct{}{};
 	return snap
 }
 
@@ -182,12 +185,6 @@ func (s *Historysnap) inturn(number uint64, signer common.Address) bool {
 	for offset < len(signers) && signers[offset] != signer {
 		offset++
 	}
-	
-	/*
-	strs := []string{"cew32", "a43", "bd21"}
-    sort.Strings(strs)
-    fmt.Println("Strings:", strs)
-	*/
 	return (number % uint64(len(signers))) == uint64(offset)
 }
 
@@ -205,6 +202,7 @@ func (s *Historysnap) signers() []common.Address {
 			}
 		}
 	}
+	
 	return signers
 }
 
@@ -217,24 +215,35 @@ func (s *Historysnap) inturnHash(number uint64, signerHash string) bool {
 	}
 	return (number % uint64(len(signers))) == uint64(offset)
 }
+*/
 
 // 按照降序获取当前已经授权的sigers
 
-func (s *Historysnap) signers() []string {
+func (s *Historysnap) signersHash() []string {
 	signersHash := make([]string, 0, len(s.SignersHash))
+	
 	for signerHash := range s.SignersHash {
 		signersHash = append(signersHash, signerHash)
 	}
-	for i := 0; i < len(signerHash); i++ {
-		for j := i + 1; j < len(signerHash); j++ {
+	
+	/*for i := 0; i < len(signersHash); i++ {
+		for j := i + 1; j < len(signersHash); j++ {
 			if bytes.Compare(signers[i][:], signers[j][:]) > 0 {
 				signers[i], signers[j] = signers[j], signers[i]
 			}
 		}
-	}
-	return signers
+	}*
+	*/
+	sort.Strings(signersHash)
+			/*
+	strs := []string{"cew32", "a43", "bd21"}
+    sort.Strings(strs)
+    fmt.Println("Strings:", strs)
+	*/
+	
+	return signersHash
 }
-*/
+
 
 // apply creates a new authorization snapshot by applying the given headers to
 // the original one.
