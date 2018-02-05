@@ -104,11 +104,12 @@ func (p *prometh) makeGenesis() {
 	
 	inputHash := p.read(); 
 	bighash, _ := new(big.Int).SetString(inputHash, 16)
-	hash := common.BigToAddressHash(bighash)
+	//hash := common.BigToAddressHash(bighash)
 	//signersHash = append(signersHash, hash)
 	
 	genesis.ExtraHash = make([]byte, 32+len(signersHash)*common.AddressLength+65)
-	copy(genesis.ExtraHash[32+common.AddressLength:], hash[:])
+	copy(genesis.ExtraHash[32+common.AddressLength:], bighash.Bytes()[:])
+	
 	
 	fmt.Println("%d",genesis.ExtraHash[:])
 	
@@ -125,6 +126,7 @@ func (p *prometh) makeGenesis() {
 		}
 		break
 	}
+	
 	// Add a batch of precompile balances to avoid them getting deleted
 	for i := int64(0); i < 256; i++ {
 		genesis.Alloc[common.BigToAddress(big.NewInt(i))] = core.GenesisAccount{Balance: big.NewInt(1)}
